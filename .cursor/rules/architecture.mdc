@@ -1,0 +1,63 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+Building a data-agent application.
+
+Goal of the application - Enable user to upload Excel, CSV. In a chat/natural language fashion enable user to "talk to data". perform data analysis and visualisation. Also be able to do descriptive analysis and some predictive analysis.
+
+
+I. Overall Flow
+
+1. - User uploads data (CSV, Excel, etc.) and/or interacts with the UI:
+   - The user can ask any question regarding the data, request visualizations, run statistical analyses, etc.
+2. - Request arrives at the Orchestrator (an API/backend service):
+   - The orchestrator stores metadata about the data in a memory for now. the metadata will be - file column names, and first 10 records.
+   - The file data itself may go to an object store like AWS S3.
+3. - Orchestrator calls the LLM service (either an external API like OpenAI/) with:
+   - The user’s question
+   - Context about the dataset schema, variable types, known transformations, etc.
+   - Possibly some partial code or stubs that show how the environment is set up (e.g., “You have these Python libraries installed, like pandas, numpy, matplotlib. This is your data’s shape, etc.”).
+4. LLM returns generated Python code that answers the user’s request: e.g., “To compute descriptive statistics on columns A, B, do X in pandas.”
+5.  Orchestrator sends code to a Code Runner microservice:
+   - The code runner environment is ephemeral, possibly a short-lived pod or container, which:
+   -  Receives the code and the user data references
+   -  Executes the code in a it's own sandbox env
+   - Captures stdout, plots, and any error logs
+6.  Result is returned to the Orchestrator:
+- If successful, the Orchestrator forwards results/plots to the UI.
+- If an exception occurs, the Orchestrator sends that error message back to the LLM in order to iterate and fix the code. This can happen - behind the scenes so that the user sees fewer or no errors, or you can expose partial debugging info to the user.
+- User sees final result in the UI. Possibly the user can refine or ask follow-up questions.
+
+
+
+There will be 3 componenets to the application
+
+- Front-End / UI
+Purpose:
+Let users upload data files.
+Let users type in natural language questions/requests.
+Present visualizations and textual results.
+Implementation Notes:
+A single-page application (SPA) on React, Vue, Angular, etc.
+
+- Runner Service/orchestrator - FastAPI Python
+
+Purpose:
+Central “brain” that coordinates user requests, file storage, LLM calls, code execution, and returning results.
+Maintains user session context, file metadata, and the conversation history with the LLM.
+Responsibilities:
+Authentication & Authorization: Ensures each user can only access their own data/analysis.
+File Management: On data upload, store the file in an object store like S3 (or an NFS volume, minio, etc.), keep metadata in a DB (file name, schema, row count, etc.).
+LLM Integration: Calls the LLM endpoint with the user’s question plus relevant context and instructions.
+Job Dispatch to Code Runner: Submits the generated code, user data references, and environment specs to the code runner service.
+Error Handling: If the code runner returns an error, feed it back to the LLM for correction or show an error to the user.
+
+
+Code Runner Service
+Purpose:
+Receives Python code from the Orchestrator, runs it in a sandboxed environment, and returns outputs (console logs, numeric results, or generated plots).
+
+
