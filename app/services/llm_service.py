@@ -1,117 +1,133 @@
-from typing import Dict, Any, Optional
+import os
 from openai import AsyncOpenAI
-from ..core.config import settings
-import logging
-import json
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Any, Tuple
+import pandas as pd
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from io import StringIO
 
 class LLMService:
     def __init__(self):
-        if not settings.OPENAI_API_KEY:
-            raise ValueError("OpenAI API key not found in environment variables")
-        self.client = AsyncOpenAI(
-            api_key=settings.OPENAI_API_KEY,
-            project=settings.OPENAI_PROJECT_ID
-        )
+        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.model = "gpt-4-turbo-preview"
+
+    def _get_system_prompt(self) -> str:
+        return """You are a data analysis expert. Your task is to help users analyze their data by generating Python code.
+        The code should be focused on data analysis and visualization using pandas, numpy, and plotly.
         
-    async def generate_code(self, query: str, metadata: Dict[str, Any]) -> Optional[str]:
-        """Generate Python code to answer the query using the dataset metadata."""
+        Important rules:
+        1. NEVER use plt.show() or fig.show() - instead return the figure and data as a tuple: (figure, data)
+        2. Always use plotly for visualizations
+        3. For descriptive statistics, use pandas describe() and other relevant methods
+        4. For data exploration, use appropriate pandas methods like info(), columns, etc.
+        5. Return both the figure (if any) and the data in a tuple format
+        6. Handle missing values appropriately
+        7. Use appropriate data types for analysis
+        
+        The code should be in a function named analyze_data that takes a file_path parameter.
+        The function should return a tuple of (figure, data) where:
+        - figure: A plotly figure object (or None if no visualization)
+        - data: A dictionary containing the analysis results (or None if no data to return)
+        """
+
+    def _get_user_prompt(self, query: str, data_info: Dict[str, Any]) -> str:
+        return f"""Please analyze the data based on this query: "{query}"
+
+        Dataset Information:
+        - File path: {data_info.get('file_path')}
+        - Columns: {data_info.get('columns', [])}
+        - Data types: {data_info.get('dtypes', {})}
+        - Sample data: {data_info.get('sample_data', {})}
+
+        Generate Python code that:
+        1. Reads the data using pandas
+        2. Performs the requested analysis
+        3. Creates visualizations if appropriate
+        4. Returns both the figure and data in a tuple
+
+        The code should be complete and ready to run. Do not include any explanations or markdown formatting.
+        """
+
+    async def generate_code(self, query: str, data_info: Dict[str, Any]) -> str:
+        """Generate Python code based on the user's query and data information."""
         try:
-            # Log input parameters
-            logger.info(f"Generating code for query: {query}")
-            logger.info(f"Using metadata: {json.dumps(metadata, indent=2)}")
-
-            # Construct a detailed system message with data context
-            system_message = f"""You are a data analysis expert. You have access to a dataset with the following characteristics:
-
-Filename: {metadata['filename']}
-Total rows: {metadata['total_rows']}
-
-Columns:
-{self._format_columns(metadata['column_info'])}
-
-Instructions:
-1. Create a function named 'analyze_data' that takes 'file_path' as a parameter
-2. Use pandas for data analysis (pd is already imported)
-3. Create visualizations using plotly (px and go are already imported)
-4. Handle null values appropriately
-5. Include error handling
-6. Return the code as a single string without markdown formatting
-7. Use the exact column names from the metadata
-8. Include data type information in your analysis
-9. The function should return the analysis results
-10. Do not include any import statements - they are already available
-
-Example function structure:
-def analyze_data(file_path):
-    # Your code here
-    return result
-
-The code should be ready to execute and should return the results in a format that can be displayed in a web interface. 
-No debug or print statements needed."""
-
-            logger.info(f"System message: {system_message}")
-
-            # Create the chat completion
-            logger.info("Making API call to OpenAI...")
             response = await self.client.chat.completions.create(
-                model="gpt-4",
+                model=self.model,
                 messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": f"Write Python code to answer this question: {query}"}
+                    {"role": "system", "content": self._get_system_prompt()},
+                    {"role": "user", "content": self._get_user_prompt(query, data_info)}
                 ],
-                max_completion_tokens=1000
+                temperature=0.7,
+                max_tokens=2000
             )
-            logger.info(f"OpenAI API response: {response}")
-
-            # Extract the generated code
-            if not response or not hasattr(response, 'choices') or not response.choices:
-                raise ValueError("Invalid response structure from OpenAI")
-                
-            generated_code = response.choices[0].message.content
-            if not generated_code:
-                raise ValueError("OpenAI returned empty response")
-            
-            # Clean up the code
-            generated_code = generated_code.strip()
-            
-            # Log the generated code for debugging
-            logger.info(f"Generated code:\n{generated_code}")
-            
-            return generated_code
-
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.error(f"Error generating code: {str(e)}", exc_info=True)
-            raise ValueError(f"Failed to generate code: {str(e)}")
+            print(f"Error generating code: {str(e)}")
+            raise
 
-    def _format_columns(self, column_info: Dict[str, Dict[str, Any]]) -> str:
-        """Format column information for the system message."""
-        formatted_columns = []
-        for col_name, info in column_info.items():
-            col_info = [
-                f"- {col_name} ({info['type']})",
-                f"  Sample values: {info['sample_values']}",
-                f"  Has null values: {info['has_nulls']}"
-            ]
-            formatted_columns.extend(col_info)
-        return "\n".join(formatted_columns)
-
-    def _create_system_message(self, data_context: Dict[str, Any]) -> str:
-        """Create a system message with data context for the LLM"""
-        return f"""You are a Python code generator that helps analyze data files.
-        
-The data is in a file named '{data_context['filename']}'.
-The file has the following columns: {', '.join(data_context['columns'])}
-
-You have access to these Python libraries:
-- pandas (as pd)
-- numpy (as np)
-- matplotlib.pyplot (as plt)
-- plotly.express (as px)
-- plotly.graph_objects (as go)
-
-The data will be loaded into a pandas DataFrame named 'df'.
-Write code that answers the user's question about this data.
-Only include the code in your response, no explanations or markdown.
-Make sure your code is complete and handles errors appropriately.""" 
+    async def analyze_data(self, file_path: str, query: str) -> Tuple[Any, Dict[str, Any]]:
+        """Analyze the data based on the query and return results."""
+        try:
+            # Read the data to get information
+            df = pd.read_csv(file_path)
+            
+            # For data exploration queries, return comprehensive analysis
+            if query.lower().startswith(('explain', 'describe', 'show', 'tell')):
+                # Create comprehensive data exploration result
+                data = {
+                    "basic_info": {
+                        "shape": df.shape,
+                        "columns": df.columns.tolist(),
+                        "dtypes": df.dtypes.to_dict(),
+                        "missing_values": df.isnull().sum().to_dict()
+                    },
+                    "numeric_stats": df.describe().to_dict() if df.select_dtypes(include=[np.number]).columns.any() else None,
+                    "categorical_stats": {
+                        col: df[col].value_counts().to_dict()
+                        for col in df.select_dtypes(include=['object', 'category']).columns
+                    } if df.select_dtypes(include=['object', 'category']).columns.any() else None
+                }
+                
+                # Create a summary visualization
+                fig = None
+                numeric_cols = df.select_dtypes(include=[np.number]).columns
+                if len(numeric_cols) > 0:
+                    fig = px.box(df, y=numeric_cols[0], title=f"Distribution of {numeric_cols[0]}")
+                
+                return fig, data
+            
+            # For other queries, generate and execute code
+            data_info = {
+                "file_path": file_path,
+                "columns": df.columns.tolist(),
+                "dtypes": df.dtypes.to_dict(),
+                "sample_data": df.head().to_dict()
+            }
+            
+            # Generate code based on the query
+            code = await self.generate_code(query, data_info)
+            
+            # Create a local namespace for code execution
+            local_vars = {
+                'pd': pd,
+                'np': np,
+                'px': px,
+                'go': go
+            }
+            
+            # Execute the generated code
+            exec(code, {}, local_vars)
+            
+            # Get the result from the analyze_data function
+            result = local_vars.get('analyze_data')(file_path)
+            
+            # Ensure result is a tuple
+            if not isinstance(result, tuple):
+                result = (None, result)
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error in analyze_data: {str(e)}")
+            raise 
