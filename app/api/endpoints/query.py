@@ -16,32 +16,42 @@ async def process_query(request: QueryRequest) -> Dict[str, Any]:
     """Process a query and return the analysis results."""
     try:
         # Get file path and validate
-        file_path = os.path.join(data_service.upload_dir, request.filename)
+        file_path = os.path.join("uploads", request.filename)
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File not found")
+            raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
             
         # Get stored metadata
         try:
             data_context = data_service.get_metadata(request.filename)
             logger.info(f"Retrieved metadata for file: {data_context}")
         except Exception as e:
-            logger.error(f"Error retrieving metadata: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Error retrieving file metadata: {str(e)}")
+            logger.warning(f"Could not retrieve metadata: {str(e)}")
+            data_context = {}
         
         # Generate code using LLM
-        generated_code = await llm_service.generate_code(
-            query=request.query,
-            data_info={"filename": request.filename}
-        )
-        print("Generated code: ", generated_code)
+        try:
+            generated_code = await llm_service.generate_code(
+                query=request.query,
+                data_info=data_context
+            )
+            logger.info(f"Generated code: {generated_code}")
+            if not generated_code:
+                raise HTTPException(status_code=500, detail="Failed to generate code: Empty response from LLM")
+        except Exception as e:
+            logger.error(f"Error generating code: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to generate code: {str(e)}")
+        
         # Execute the generated code
-        result = code_executor.execute_code(
-            code=generated_code,
-            file_path=f"data/{request.filename}"
-        )
-        
-        return result
-        
+        try:
+            result = code_executor.execute_code(generated_code, file_path)
+            logger.info(f"Execution result: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Error executing code: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"Failed to execute code: {str(e)}")
+            
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e)) 
