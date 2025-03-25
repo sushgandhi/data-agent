@@ -79,7 +79,14 @@ Please analyze the data based on this query:
     1. Reads the data using pandas
     2. Performs the requested analysis
     3. Creates visualizations if appropriate
-    4. Returns both the figure and data in a tuple, if there is no figure and data, return None
+    4. ALWAYS returns a tuple of (figure, data) where:
+       - figure: A Plotly figure object (or None if no visualization is needed)
+       - data: A dictionary containing at least:
+         * shape: tuple of (rows, columns)
+         * columns: list of column names
+         * dtypes: dictionary of column data types
+         * missing_values: dictionary of missing value counts
+         * data: the actual data (first few rows)
     5. only return the code, no other text
 
     For data exploration queries, include:

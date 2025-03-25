@@ -51,7 +51,7 @@ class CodeExecutor:
         return '\n'.join(imports + [''] + cleaned_lines)
 
     def _handle_non_json_values(self, obj):
-        """Handle non-JSON compliant values by converting them to strings."""
+        print(f"Handling non-JSON value: {obj} of type {type(obj)}")
         if isinstance(obj, (np.integer, np.floating)):
             return obj.item()
         elif isinstance(obj, (np.ndarray, pd.Series)):
@@ -62,6 +62,13 @@ class CodeExecutor:
             return [self._handle_non_json_values(item) for item in obj]
         elif isinstance(obj, float) and (np.isinf(obj) or np.isnan(obj)):
             return str(obj)
+        try:
+            # Try converting the object to a pandas dtype.
+            pd.api.types.pandas_dtype(obj)
+            return str(obj)
+        except Exception:
+            # If it's not a valid pandas dtype, just pass through.
+            pass
         return obj
         
     def execute_code(self, code: str, file_path: str) -> Dict[str, Any]:
@@ -91,7 +98,6 @@ class CodeExecutor:
             # Execute the analyze_data function
             logger.info("Executing analyze_data function...")
             result = analyze_data_func(file_path)
-            logger.info(f"Function result: {result}")
             
             # Ensure result is a tuple
             if not isinstance(result, tuple):
@@ -109,19 +115,34 @@ class CodeExecutor:
             else:
                 plot_data = None
             
-            # Convert numpy types to native Python types
-            def convert_numpy_types(obj):
-                if isinstance(obj, (np.integer, np.floating)):
-                    return obj.item()
-                elif isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                elif isinstance(obj, dict):
-                    return {k: convert_numpy_types(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [convert_numpy_types(item) for item in obj]
-                return obj
+            # Ensure data is a dictionary with required fields
+            if not isinstance(data, dict):
+                data = {}
             
-            converted_data = convert_numpy_types(data)
+            # If data is empty or missing required fields, create a default structure
+            if not data or not all(key in data for key in ['shape', 'columns', 'dtypes', 'missing_values', 'data']):
+                try:
+                    df = pd.read_csv(file_path)
+                    data = {
+                        'shape': df.shape,
+                        'columns': df.columns.tolist(),
+                        'dtypes': df.dtypes.astype(str).to_dict(),
+                        'missing_values': df.isnull().sum().to_dict(),
+                        'data': df.head().values.tolist()
+                    }
+                except Exception as e:
+                    logger.error(f"Error creating default data structure: {str(e)}")
+                    data = {
+                        'shape': [0, 0],
+                        'columns': [],
+                        'dtypes': {},
+                        'missing_values': {},
+                        'data': []
+                    }
+            
+            # Convert numpy types to native Python types
+            logger.info(f"Data before conversion: {data}")
+            converted_data = self._handle_non_json_values(data)
             logger.info(f"Converted data: {json.dumps(converted_data, indent=2)}")
             
             return {

@@ -6,7 +6,13 @@ export interface Message {
 
 export interface AnalysisResult {
     plot: string | null;
-    data: any | null;
+    data: {
+        shape: [number, number];
+        columns: string[];
+        dtypes: Record<string, string>;
+        missing_values: Record<string, number>;
+        data: any;
+    } | null;
 }
 
 export interface ChatState {
