@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 import os
 import logging
 
-from .api.endpoints import data, query
-from .core.config import settings
+from app.api.endpoints import data, query
+from app.core.config import settings
 
 # Configure logging
 logging.basicConfig(

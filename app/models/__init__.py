@@ -1,3 +1,3 @@
 """
-Models package for the data-agent application.
+Models package for data-agent.
 """
