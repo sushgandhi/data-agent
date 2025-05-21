@@ -109,7 +109,7 @@ async function handleFileUpload() {
     uploadBtn.textContent = 'Uploading...';
     
     // Show loading message
-    const loadingElement = addLoadingIndicator();
+    const loadingId = addLoadingIndicator();
     
     try {
         // Create FormData object to send the file
@@ -129,7 +129,7 @@ async function handleFileUpload() {
         const data = await response.json();
         
         // Remove loading indicator
-        removeLoadingIndicator(loadingElement);
+        removeLoadingIndicator(loadingId);
         
         // Check if upload was successful
         if (data.success) {
@@ -170,7 +170,7 @@ async function handleFileUpload() {
         }
     } catch (error) {
         // Remove loading indicator
-        removeLoadingIndicator(loadingElement);
+        removeLoadingIndicator(loadingId);
         
         // Reset upload button
         uploadBtn.disabled = false;
@@ -206,13 +206,13 @@ async function handleChatSubmit(event) {
     sendBtn.disabled = true;
     
     // Add loading indicator
-    const loadingElement = addLoadingIndicator();
+    const loadingId = addLoadingIndicator();
     
     try {
         const response = await sendQueryToApi(query, currentState.filePath);
         
         // Remove loading indicator
-        removeLoadingIndicator(loadingElement);
+        removeLoadingIndicator(loadingId);
         
         // Enable input
         chatInput.disabled = false;
@@ -242,7 +242,7 @@ async function handleChatSubmit(event) {
         
     } catch (error) {
         // Remove loading indicator
-        removeLoadingIndicator(loadingElement);
+        removeLoadingIndicator(loadingId);
         
         // Enable input
         chatInput.disabled = false;
@@ -300,9 +300,29 @@ function processApiResponse(response) {
             const functionResult = result.result;
             
             if (functionResult.message) {
-                // Check if we have a DataFrame result
+                // Check if we have a DataFrame result or metadata with a dataframe-like structure
                 if (functionResult.result_df && Array.isArray(functionResult.result_df)) {
                     showBotMessageWithTable(functionResult.message, functionResult.result_df);
+                } 
+                // Check if we have a data summary in metadata
+                else if (functionResult.metadata && typeof functionResult.metadata === 'object') {
+                    // First output the general message
+                    showBotMessage(functionResult.message);
+                    
+                    // Then check if there's a dataframe-like structure in metadata
+                    const metadataEntries = Object.entries(functionResult.metadata);
+                    for (const [key, value] of metadataEntries) {
+                        if (Array.isArray(value)) {
+                            showBotMessageWithTable(`${key}:`, value);
+                        } else if (key === 'top_values' && typeof value === 'object') {
+                            // Convert object to array for table display
+                            const tableData = Object.entries(value).map(([label, count]) => ({
+                                'Value': label,
+                                'Count': count
+                            }));
+                            showBotMessageWithTable('Top Values:', tableData);
+                        }
+                    }
                 }
                 // Check if we have a plot URL
                 else if (functionResult.plot_url) {
@@ -346,16 +366,25 @@ function showBotMessageWithTable(message, data) {
     const tableContainer = messageElement.querySelector('.table-container');
     const table = document.createElement('table');
     
-    // Create table header
-    if (data.length > 0) {
+    // Check if data is not empty
+    if (data && data.length > 0) {
         const thead = document.createElement('thead');
         const headerRow = document.createElement('tr');
         
-        for (const key of Object.keys(data[0])) {
+        // Get all unique keys from all objects to handle inconsistent schemas
+        const allKeys = new Set();
+        data.forEach(row => {
+            if (row && typeof row === 'object') {
+                Object.keys(row).forEach(key => allKeys.add(key));
+            }
+        });
+        
+        // Create header cells for each key
+        allKeys.forEach(key => {
             const th = document.createElement('th');
             th.textContent = key;
             headerRow.appendChild(th);
-        }
+        });
         
         thead.appendChild(headerRow);
         table.appendChild(thead);
@@ -363,20 +392,43 @@ function showBotMessageWithTable(message, data) {
         // Create table body
         const tbody = document.createElement('tbody');
         
-        for (const row of data) {
+        // Add rows for each data item
+        data.forEach(row => {
+            // Skip if row is not an object
+            if (!row || typeof row !== 'object') return;
+            
             const tr = document.createElement('tr');
             
-            for (const key of Object.keys(data[0])) {
+            // Add cells for each key, in the same order as headers
+            allKeys.forEach(key => {
                 const td = document.createElement('td');
-                td.textContent = row[key] !== null ? row[key] : '';
+                
+                // Format cell content based on data type
+                const cellValue = row[key];
+                if (cellValue === null || cellValue === undefined) {
+                    td.textContent = '';
+                } else if (typeof cellValue === 'object') {
+                    td.textContent = JSON.stringify(cellValue);
+                } else {
+                    td.textContent = String(cellValue);
+                }
+                
                 tr.appendChild(td);
-            }
+            });
             
             tbody.appendChild(tr);
-        }
+        });
         
         table.appendChild(tbody);
         tableContainer.appendChild(table);
+    } else {
+        // Show a message if no data
+        const noDataMsg = document.createElement('p');
+        noDataMsg.textContent = 'No data available';
+        noDataMsg.style.fontStyle = 'italic';
+        noDataMsg.style.color = '#777';
+        noDataMsg.style.padding = '12px';
+        tableContainer.appendChild(noDataMsg);
     }
     
     chatMessages.appendChild(messageElement);
@@ -387,7 +439,22 @@ function showBotMessageWithTable(message, data) {
 function showBotMessageWithImage(message, imageUrl) {
     const messageElement = botMessageWithImageTemplate.content.cloneNode(true);
     messageElement.querySelector('p').textContent = message;
-    messageElement.querySelector('img').src = imageUrl;
+    
+    const img = messageElement.querySelector('img');
+    img.src = imageUrl;
+    
+    // Add loading state and error handling for images
+    img.classList.add('loading');
+    img.addEventListener('load', () => {
+        img.classList.remove('loading');
+    });
+    img.addEventListener('error', () => {
+        img.classList.remove('loading');
+        img.classList.add('error');
+        img.src = 'https://via.placeholder.com/800x400?text=Image+Load+Failed';
+        img.alt = 'Failed to load visualization';
+    });
+    
     chatMessages.appendChild(messageElement);
     scrollToBottom();
 }
@@ -403,15 +470,22 @@ function showErrorMessage(message) {
 // Add loading indicator
 function addLoadingIndicator() {
     const loadingElement = loadingTemplate.content.cloneNode(true);
+    const loadingMessage = loadingElement.querySelector('.message');
+    
+    // Add a unique ID to the loading element for easier removal
+    const loadingId = 'loading-' + generateId();
+    loadingMessage.id = loadingId;
+    
     chatMessages.appendChild(loadingElement);
     scrollToBottom();
-    return chatMessages.lastChild;
+    return loadingId;
 }
 
 // Remove loading indicator
-function removeLoadingIndicator(element) {
-    if (element && element.parentNode) {
-        element.parentNode.removeChild(element);
+function removeLoadingIndicator(loadingId) {
+    const loadingElement = document.getElementById(loadingId);
+    if (loadingElement) {
+        loadingElement.remove();
     }
 }
 
