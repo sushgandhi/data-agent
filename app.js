@@ -1,5 +1,5 @@
 // Configuration
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = '/api';  // Use relative URL to work with the proxy
 const API_ENDPOINTS = {
     query: `${API_BASE_URL}/query`,
     metadata: `${API_BASE_URL}/metadata`,
@@ -299,15 +299,28 @@ function processApiResponse(response) {
         if (result && result.success) {
             const functionResult = result.result;
             
-            if (functionResult.message) {
-                // Check if we have a DataFrame result or metadata with a dataframe-like structure
-                if (functionResult.result_df && Array.isArray(functionResult.result_df)) {
-                    showBotMessageWithTable(functionResult.message, functionResult.result_df);
-                } 
+            console.log("Function result:", functionResult); // Debug: Log the function result
+            
+            if (functionResult) {
+                // Check if we have a plot URL
+                if (functionResult.plot_url) {
+                    const plotUrl = functionResult.plot_url;
+                    // Make sure the URL is absolute
+                    const absoluteUrl = plotUrl.startsWith('http') 
+                        ? plotUrl 
+                        : `${window.location.protocol}//${window.location.host}/${plotUrl.replace(/^\//, '')}`;
+                    
+                    console.log("Plot URL:", absoluteUrl); // Debug: Log the plot URL
+                    showBotMessageWithImage(functionResult.message || "Visualization generated successfully", absoluteUrl);
+                }
+                // Check if we have a DataFrame result
+                else if (functionResult.result_df && Array.isArray(functionResult.result_df)) {
+                    showBotMessageWithTable(functionResult.message || "Data table", functionResult.result_df);
+                }
                 // Check if we have a data summary in metadata
                 else if (functionResult.metadata && typeof functionResult.metadata === 'object') {
                     // First output the general message
-                    showBotMessage(functionResult.message);
+                    showBotMessage(functionResult.message || "Data summary");
                     
                     // Then check if there's a dataframe-like structure in metadata
                     const metadataEntries = Object.entries(functionResult.metadata);
@@ -324,13 +337,12 @@ function processApiResponse(response) {
                         }
                     }
                 }
-                // Check if we have a plot URL
-                else if (functionResult.plot_url) {
-                    // Use the actual plot URL from the response
-                    showBotMessageWithImage(functionResult.message, functionResult.plot_url);
+                // If we just have a message
+                else if (functionResult.message) {
+                    showBotMessage(functionResult.message);
                 }
                 else {
-                    showBotMessage(functionResult.message);
+                    showBotMessage('Operation completed successfully.');
                 }
             } else {
                 showBotMessage('Operation completed successfully.');
@@ -359,6 +371,8 @@ function showBotMessage(message) {
 
 // Show bot message with table
 function showBotMessageWithTable(message, data) {
+    console.log("Showing table with data:", data); // Debug: Log table data
+    
     const messageElement = botMessageWithTableTemplate.content.cloneNode(true);
     messageElement.querySelector('p').textContent = message;
     
@@ -379,6 +393,11 @@ function showBotMessageWithTable(message, data) {
             }
         });
         
+        // If no keys were found (empty objects), add a placeholder
+        if (allKeys.size === 0) {
+            allKeys.add('Value');
+        }
+        
         // Create header cells for each key
         allKeys.forEach(key => {
             const th = document.createElement('th');
@@ -394,27 +413,47 @@ function showBotMessageWithTable(message, data) {
         
         // Add rows for each data item
         data.forEach(row => {
-            // Skip if row is not an object
-            if (!row || typeof row !== 'object') return;
-            
             const tr = document.createElement('tr');
             
-            // Add cells for each key, in the same order as headers
-            allKeys.forEach(key => {
-                const td = document.createElement('td');
-                
-                // Format cell content based on data type
-                const cellValue = row[key];
-                if (cellValue === null || cellValue === undefined) {
+            // Handle primitive values (strings, numbers) by wrapping in an object
+            if (row === null || row === undefined) {
+                // Create an empty row
+                allKeys.forEach(() => {
+                    const td = document.createElement('td');
                     td.textContent = '';
-                } else if (typeof cellValue === 'object') {
-                    td.textContent = JSON.stringify(cellValue);
-                } else {
-                    td.textContent = String(cellValue);
-                }
-                
-                tr.appendChild(td);
-            });
+                    tr.appendChild(td);
+                });
+            } else if (typeof row !== 'object' || Array.isArray(row)) {
+                // If row is a primitive value or array, display it in the first column
+                let isFirst = true;
+                allKeys.forEach(key => {
+                    const td = document.createElement('td');
+                    if (isFirst) {
+                        td.textContent = String(row);
+                        isFirst = false;
+                    } else {
+                        td.textContent = '';
+                    }
+                    tr.appendChild(td);
+                });
+            } else {
+                // Normal object row
+                allKeys.forEach(key => {
+                    const td = document.createElement('td');
+                    
+                    // Format cell content based on data type
+                    const cellValue = row[key];
+                    if (cellValue === null || cellValue === undefined) {
+                        td.textContent = '';
+                    } else if (typeof cellValue === 'object') {
+                        td.textContent = JSON.stringify(cellValue);
+                    } else {
+                        td.textContent = String(cellValue);
+                    }
+                    
+                    tr.appendChild(td);
+                });
+            }
             
             tbody.appendChild(tr);
         });
@@ -437,23 +476,39 @@ function showBotMessageWithTable(message, data) {
 
 // Show bot message with image
 function showBotMessageWithImage(message, imageUrl) {
+    console.log("Showing image:", imageUrl); // Debug: Log when showing an image
+    
     const messageElement = botMessageWithImageTemplate.content.cloneNode(true);
     messageElement.querySelector('p').textContent = message;
     
     const img = messageElement.querySelector('img');
-    img.src = imageUrl;
     
-    // Add loading state and error handling for images
+    // Add loading state
     img.classList.add('loading');
-    img.addEventListener('load', () => {
-        img.classList.remove('loading');
-    });
-    img.addEventListener('error', () => {
-        img.classList.remove('loading');
-        img.classList.add('error');
-        img.src = 'https://via.placeholder.com/800x400?text=Image+Load+Failed';
-        img.alt = 'Failed to load visualization';
-    });
+    img.style.minHeight = '200px';
+    img.style.background = '#f0f0f0';
+    
+    // Set a placeholder until the image loads
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+    
+    // Wait a bit before loading the actual image to ensure the DOM is updated
+    setTimeout(() => {
+        img.onload = function() {
+            img.classList.remove('loading');
+            console.log("Image loaded successfully"); // Debug: Log when image loads
+        };
+        
+        img.onerror = function(e) {
+            console.error("Error loading image:", e); // Debug: Log image load errors
+            img.classList.remove('loading');
+            img.classList.add('error');
+            img.src = 'https://via.placeholder.com/800x400?text=Image+Load+Failed';
+            img.alt = 'Failed to load visualization';
+        };
+        
+        // Set the actual image source
+        img.src = imageUrl;
+    }, 100);
     
     chatMessages.appendChild(messageElement);
     scrollToBottom();
@@ -470,13 +525,36 @@ function showErrorMessage(message) {
 // Add loading indicator
 function addLoadingIndicator() {
     const loadingElement = loadingTemplate.content.cloneNode(true);
-    const loadingMessage = loadingElement.querySelector('.message');
+    const loadingMessage = document.createElement('div');
+    loadingMessage.className = 'message bot-message loading';
+    
+    // Create the message avatar
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    const icon = document.createElement('i');
+    icon.className = 'fas fa-robot';
+    avatar.appendChild(icon);
+    
+    // Create the message content with typing indicator
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    const typingIndicator = document.createElement('div');
+    typingIndicator.className = 'typing-indicator';
+    for (let i = 0; i < 3; i++) {
+        const span = document.createElement('span');
+        typingIndicator.appendChild(span);
+    }
+    content.appendChild(typingIndicator);
+    
+    // Assemble the message
+    loadingMessage.appendChild(avatar);
+    loadingMessage.appendChild(content);
     
     // Add a unique ID to the loading element for easier removal
     const loadingId = 'loading-' + generateId();
     loadingMessage.id = loadingId;
     
-    chatMessages.appendChild(loadingElement);
+    chatMessages.appendChild(loadingMessage);
     scrollToBottom();
     return loadingId;
 }
