@@ -29,13 +29,17 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query, Body, UploadFile, File
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from data_flow_agent.application import ApplicationManager
 
-# Create uploads directory if it doesn't exist
+# Create directories if they don't exist
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+PLOTS_DIR = Path("plots")
+PLOTS_DIR.mkdir(exist_ok=True)
 
 # Initialize application manager
 app_manager = ApplicationManager()
@@ -56,6 +60,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static directories
+app.mount("/plots", StaticFiles(directory="plots"), name="plots")
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Custom JSON encoder to handle numpy and pandas types
 class CustomJSONEncoder(json.JSONEncoder):
@@ -84,6 +92,29 @@ def serialize_response(response_data: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         JSON-compatible dictionary
     """
+    # Process the plot_url to make it relative if it's a local file path
+    if isinstance(response_data, dict) and 'result' in response_data:
+        result = response_data['result']
+        if isinstance(result, dict) and 'result' in result and isinstance(result['result'], dict):
+            # Look for plot_url in nested result
+            inner_result = result['result']
+            if 'plot_url' in inner_result and isinstance(inner_result['plot_url'], str):
+                plot_url = inner_result['plot_url']
+                # If it's a local file path, make it a relative URL
+                if os.path.exists(plot_url) and plot_url.startswith(str(PLOTS_DIR)):
+                    # Convert to relative URL
+                    plot_path = Path(plot_url)
+                    inner_result['plot_url'] = f"/plots/{plot_path.name}"
+        
+        # Look for plot_url directly in result
+        if isinstance(result, dict) and 'plot_url' in result and isinstance(result['plot_url'], str):
+            plot_url = result['plot_url']
+            # If it's a local file path, make it a relative URL
+            if os.path.exists(plot_url) and plot_url.startswith(str(PLOTS_DIR)):
+                # Convert to relative URL
+                plot_path = Path(plot_url)
+                result['plot_url'] = f"/plots/{plot_path.name}"
+    
     # First, convert any DataFrame results to dict format
     if isinstance(response_data, dict) and 'result' in response_data:
         result = response_data['result']
@@ -239,6 +270,24 @@ async def health_check() -> Dict[str, str]:
     """
     return {"status": "healthy"}
 
+# Get a plot directly as a file
+@app.get("/plot/{plot_name}")
+async def get_plot(plot_name: str):
+    """
+    Get a plot file directly.
+    
+    Args:
+        plot_name: Name of the plot file
+        
+    Returns:
+        The plot file
+    """
+    plot_path = PLOTS_DIR / plot_name
+    if not plot_path.exists():
+        raise HTTPException(status_code=404, detail=f"Plot not found: {plot_name}")
+    
+    return FileResponse(str(plot_path))
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8080) 
+    uvicorn.run(app, host="0.0.0.0", port=8000) 
