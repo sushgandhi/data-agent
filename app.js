@@ -304,14 +304,38 @@ function processApiResponse(response) {
             if (functionResult) {
                 // Check if we have a plot URL
                 if (functionResult.plot_url) {
-                    const plotUrl = functionResult.plot_url;
-                    // Make sure the URL is absolute
-                    const absoluteUrl = plotUrl.startsWith('http') 
-                        ? plotUrl 
-                        : `${window.location.protocol}//${window.location.host}/${plotUrl.replace(/^\//, '')}`;
+                    let plotUrl = functionResult.plot_url;
+                    console.log("Original plot URL:", plotUrl);
                     
-                    console.log("Plot URL:", absoluteUrl); // Debug: Log the plot URL
-                    showBotMessageWithImage(functionResult.message || "Visualization generated successfully", absoluteUrl);
+                    // Case 1: The URL is already a relative URL from the API like "/plots/filename.png"
+                    if (plotUrl.startsWith('/plots/')) {
+                        // This is the expected format from the API
+                        plotUrl = `/api${plotUrl}`;
+                        console.log("Using API path for plots directory:", plotUrl);
+                    } 
+                    // Case 2: The URL is a filename from the plot endpoint
+                    else if (!plotUrl.includes('/') && !plotUrl.startsWith('http')) {
+                        plotUrl = `/api/plot/${plotUrl}`;
+                        console.log("Using direct plot endpoint:", plotUrl);
+                    }
+                    // Case 3: It's a full file path
+                    else if (plotUrl.includes('/') && !plotUrl.startsWith('/') && !plotUrl.startsWith('http')) {
+                        // Extract just the filename
+                        const filename = plotUrl.split('/').pop();
+                        plotUrl = `/api/plot/${filename}`;
+                        console.log("Extracted filename from path:", filename);
+                        console.log("Using plot endpoint with extracted filename:", plotUrl);
+                    }
+                    // Case 4: Already has http:// or https:// - use as is
+                    // Case 5: Other relative URL - prepend /api
+                    else if (plotUrl.startsWith('/') && !plotUrl.startsWith('/api/')) {
+                        plotUrl = `/api${plotUrl}`;
+                        console.log("Prepending /api to relative URL:", plotUrl);
+                    }
+                    
+                    console.log("Final plot URL:", plotUrl);
+                    
+                    showBotMessageWithImage(functionResult.message || "Visualization generated successfully", plotUrl);
                 }
                 // Check if we have a DataFrame result
                 else if (functionResult.result_df && Array.isArray(functionResult.result_df)) {
@@ -478,40 +502,129 @@ function showBotMessageWithTable(message, data) {
 function showBotMessageWithImage(message, imageUrl) {
     console.log("Showing image:", imageUrl); // Debug: Log when showing an image
     
-    const messageElement = botMessageWithImageTemplate.content.cloneNode(true);
+    const messageElement = botMessageWithTableTemplate.content.cloneNode(true);
     messageElement.querySelector('p').textContent = message;
     
-    const img = messageElement.querySelector('img');
+    const tableContainer = messageElement.querySelector('.table-container');
     
-    // Add loading state
-    img.classList.add('loading');
-    img.style.minHeight = '200px';
-    img.style.background = '#f0f0f0';
+    // Clear table container and add image container
+    tableContainer.innerHTML = '';
+    const imgContainer = document.createElement('div');
+    imgContainer.className = 'image-container loading';
     
-    // Set a placeholder until the image loads
-    img.src = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+    // Create loading indicator text
+    const loadingText = document.createElement('div');
+    loadingText.className = 'loading-text';
+    loadingText.textContent = 'Loading visualization...';
+    imgContainer.appendChild(loadingText);
     
-    // Wait a bit before loading the actual image to ensure the DOM is updated
-    setTimeout(() => {
-        img.onload = function() {
-            img.classList.remove('loading');
-            console.log("Image loaded successfully"); // Debug: Log when image loads
+    // Create image element
+    const img = document.createElement('img');
+    img.alt = 'Data visualization';
+    
+    // Handle image load success
+    img.onload = function() {
+        console.log("Image loaded successfully:", imageUrl);
+        imgContainer.classList.remove('loading');
+        if (loadingText.parentNode) {
+            loadingText.parentNode.removeChild(loadingText);
+        }
+    };
+    
+    // Handle image load error
+    img.onerror = function(e) {
+        console.error("Error loading image:", e, imageUrl);
+        imgContainer.classList.remove('loading');
+        imgContainer.classList.add('error');
+        
+        if (loadingText.parentNode) {
+            loadingText.parentNode.removeChild(loadingText);
+        }
+        
+        // Create error message element
+        const errorMsg = document.createElement('div');
+        errorMsg.className = 'error-message';
+        errorMsg.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Failed to load visualization<br><small>${imageUrl}</small>`;
+        imgContainer.appendChild(errorMsg);
+        
+        // Remove the img to prevent further loading attempts
+        if (img.parentNode) {
+            img.parentNode.removeChild(img);
+        }
+        
+        // Add a retry button
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'retry-btn';
+        retryBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Retry';
+        retryBtn.onclick = function() {
+            // Replace the entire image container with a new one
+            const newImgContainer = document.createElement('div');
+            newImgContainer.className = 'image-container loading';
+            
+            const newLoadingText = document.createElement('div');
+            newLoadingText.className = 'loading-text';
+            newLoadingText.textContent = 'Loading visualization...';
+            newImgContainer.appendChild(newLoadingText);
+            
+            const newImg = document.createElement('img');
+            newImg.alt = 'Data visualization';
+            
+            newImg.onload = function() {
+                newImgContainer.classList.remove('loading');
+                if (newLoadingText.parentNode) {
+                    newLoadingText.parentNode.removeChild(newLoadingText);
+                }
+            };
+            
+            newImg.onerror = function() {
+                // If it fails again, just show the error message
+                newImgContainer.classList.remove('loading');
+                newImgContainer.classList.add('error');
+                
+                if (newLoadingText.parentNode) {
+                    newLoadingText.parentNode.removeChild(newLoadingText);
+                }
+                
+                const newErrorMsg = document.createElement('div');
+                newErrorMsg.className = 'error-message';
+                newErrorMsg.innerHTML = `<i class="fas fa-exclamation-triangle"></i> Failed to load visualization<br><small>${imageUrl}</small>`;
+                newImgContainer.appendChild(newErrorMsg);
+                
+                if (newImg.parentNode) {
+                    newImg.parentNode.removeChild(newImg);
+                }
+            };
+            
+            // Set the src attribute last to trigger loading
+            setTimeout(() => {
+                newImg.src = imageUrl + '?t=' + new Date().getTime(); // Add cache-busting parameter
+                newImgContainer.appendChild(newImg);
+            }, 10);
+            
+            // Replace the old container with the new one
+            imgContainer.parentNode.replaceChild(newImgContainer, imgContainer);
         };
         
-        img.onerror = function(e) {
-            console.error("Error loading image:", e); // Debug: Log image load errors
-            img.classList.remove('loading');
-            img.classList.add('error');
-            img.src = 'https://via.placeholder.com/800x400?text=Image+Load+Failed';
-            img.alt = 'Failed to load visualization';
-        };
-        
-        // Set the actual image source
-        img.src = imageUrl;
-    }, 100);
+        imgContainer.appendChild(retryBtn);
+    };
     
+    // Add image to container (do this before setting src to avoid race conditions)
+    imgContainer.appendChild(img);
+    tableContainer.appendChild(imgContainer);
+    
+    // Add the message to the chat
     chatMessages.appendChild(messageElement);
     scrollToBottom();
+    
+    // Set the src attribute last to trigger loading
+    setTimeout(() => {
+        try {
+            img.src = imageUrl;
+        } catch (err) {
+            console.error("Error setting image source:", err);
+            img.onerror(new Error("Failed to set image source"));
+        }
+    }, 10);
 }
 
 // Show error message
